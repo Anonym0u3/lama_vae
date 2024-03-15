@@ -1,0 +1,9 @@
+pyyaml
+tqdm
+numpy
+albumentations==0.5.2
+pytorch-lightning==2.2.1
+wandb==0.16.4
+einops
+safetensors
+transformers

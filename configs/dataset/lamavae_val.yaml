@@ -1,0 +1,29 @@
+dataset:
+  target: dataset.lamavae.LAMAVAEDataset
+  params:
+    # Path to the file list.
+    indir: "/hy-tmp/DATA/ex200"
+    mask_gen_kwargs: 
+      irregular_proba: 0.5
+      irregular_kwargs:
+        max_angle: 4
+        max_len: 200
+        max_width: 100
+        max_times: 5
+        min_times: 1
+      box_proba:  0.5
+      box_kwargs:
+        margin: 10
+        bbox_min_size: 30
+        bbox_max_size: 150
+        max_times: 4
+        min_times: 1
+      segm_proba: 0
+    out_size: 512
+    use_transform: False
+data_loader:
+  batch_size: 10
+  shuffle: False
+  num_workers: 4
+  prefetch_factor: 1 #预取因子，用于预取数据样本的数量
+  drop_last: true #如果数据集大小不能被批次大小整除，则删除最后一个不完整的批次

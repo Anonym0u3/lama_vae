@@ -41,7 +41,7 @@ class DiagonalGaussianDistribution(object):
                     dim=[1, 2, 3])
     def kl_loss(self, other=None):
         return 0.5 * torch.sum(
-                    torch.pow(self.mean - other.mean, 2) / other.var ** 2
+                    torch.pow(self.mean - other.mean, 2) / (other.var ** 2)
                     + torch.pow(self.var / other.var, 2) - 1.0 - 2 * self.logvar + 2 * other.logvar,
                     dim=[1, 2, 3])
 
@@ -146,8 +146,8 @@ class lamaVAE(pl.LightningModule):
 
     def encode(self, image):
         with torch.no_grad():
-            latent, z = self.vae.encode(image)
-        return latent, z
+            latent, z , end_out = self.vae.encode(image)
+        return latent, z , end_out
     
     def decode(self, z):
         with torch.no_grad():
@@ -158,30 +158,34 @@ class lamaVAE(pl.LightningModule):
         
         return self.model(image, mask)
 
-    def get_loss(self, pred_z, gt_z, latent):
+    def get_loss(self, pred_z, gt_z, latent, pred_end_out, gt_end_out):
         pred_posterior = DiagonalGaussianDistribution(pred_z)
         gt_posterior = DiagonalGaussianDistribution(gt_z)
-        pred_latent = pred_posterior.sample()/ latent.shape[0]
-        mse_loss = F.mse_loss(pred_latent, latent)
-        kl_loss = gt_posterior.kl_loss(pred_posterior)
-        kl_loss = torch.sum(kl_loss) / kl_loss.shape[0]
-        kl_loss = torch.log(kl_loss)
-        loss = mse_loss + kl_loss
-        return loss
+        pred_latent = pred_posterior.sample()
+        mse_loss = F.mse_loss(pred_latent, latent, reduction='mean')
+        end_mse_loss = F.mse_loss(pred_end_out, gt_end_out, reduction='mean')
+        #kl_loss = pred_posterior.kl_loss(gt_posterior)
+        #kl_loss = torch.sum(kl_loss) / kl_loss.shape[0]
+        #kl_loss = torch.clamp(kl_loss, 0, 1)
+        #kl_loss = torch.log(kl_loss)
+        loss = mse_loss  + end_mse_loss
+        return {'mse_loss': mse_loss,'end_loss': end_mse_loss,'loss': loss}
     
     def _common_step(self, batch, batch_idx):
         img = batch['image']
         mask = batch['mask']
-        pred_z = self.model(img, mask)
+        pred_end_out, pred_z = self.model(img, mask)
         mid = self.forward_lama(img, mask)
-        latent, gt_z = self.encode(mid)
-        loss = self.get_loss(pred_z, gt_z, latent)
+        latent, gt_z, gt_end_out = self.encode(mid)
+        loss = self.get_loss(pred_z, gt_z, latent, pred_end_out, gt_end_out)
         return loss, img, mask, pred_z, latent, gt_z
 
     def training_step(self, batch: Dict[str, torch.Tensor], batch_idx: int) -> STEP_OUTPUT:
         loss, _, _, _, _, _ = self._common_step(batch, batch_idx)
-        self.log("train_loss", loss)
-        return loss
+        self.log("mse_loss", loss['mse_loss'])
+        self.log("end_loss", loss['end_loss'])
+        self.log("train_loss", loss['loss'])
+        return loss['loss']
     
     def validation_step(self, batch: Dict[str, torch.Tensor], batch_idx: int) -> None:
         loss, img, mask, pred_z, latent, gt_z = self._common_step(batch, batch_idx)
@@ -189,7 +193,7 @@ class lamaVAE(pl.LightningModule):
         pred_posterior = DiagonalGaussianDistribution(pred_z)
         pred_latent = pred_posterior.sample()
         pred_decode_img = self.decode(pred_latent)
-        self.log("val_loss", loss)
+        self.log("val_loss", loss['loss'])
         return gt_decode_img, pred_decode_img
 
 

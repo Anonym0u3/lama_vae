@@ -2,6 +2,7 @@
 # original implementation https://github.com/pkumivision/FFC/blob/main/model_zoo/ffc.py
 # paper https://proceedings.neurips.cc/paper/2020/file/2fd5d41ec6cfab47e32164d5624269b1-Paper.pdf
 
+import copy
 from typing import Any, Optional
 import numpy as np
 import torch
@@ -942,14 +943,14 @@ class FFCResNetGenerator_lama(nn.Module):
         h = self.encoder_resblock.block_1(h, temb)
         h = self.encoder_resblock.attn_1(h)
         h = self.encoder_resblock.block_2(h, temb)
-
         # end
         h = self.norm_out(h)
         h = nonlinearity(h)
         h = self.conv_out(h)
+        end_out = h
         h = self.quant_conv(h)
         
-        return h
+        return end_out, h
 
 class LaMa(nn.Module):
     def __init__(self, state_dict) -> None:
@@ -1136,10 +1137,10 @@ class VAE:
         pixel_samples = pixel_samples.movedim(-1,1)
         pixels_in = self.process_input(pixel_samples).to(self.vae_dtype)
         self.first_stage_model = self.first_stage_model.to(pixels_in.device)
-        samples, z = self.first_stage_model.encode(pixels_in, return_unre=True)
+        samples, z , end_out = self.first_stage_model.encode(pixels_in, return_unre=True)
         samples = samples.float()
         z = z.float()
-        return samples, z 
+        return samples, z , end_out
 
     """     
     def encode(self, pixel_samples):

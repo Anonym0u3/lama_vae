@@ -5,7 +5,7 @@ import torch.nn as nn
 import numpy as np
 from einops import rearrange
 from typing import Optional, Any
-
+import copy
 from comfy import model_management
 import comfy.ops
 ops = comfy.ops.disable_weight_init

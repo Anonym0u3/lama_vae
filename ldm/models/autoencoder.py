@@ -180,8 +180,8 @@ class AutoencodingEngineLegacy(AutoencodingEngine):
         return_unre: bool = False,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, dict]]:
         if self.max_batch_size is None:
-            z = self.encoder(x)
-            z = self.quant_conv(z)
+            end_out = self.encoder(x)
+            z = self.quant_conv(end_out)
         else:
             N = x.shape[0]
             bs = self.max_batch_size
@@ -197,7 +197,7 @@ class AutoencodingEngineLegacy(AutoencodingEngine):
         if return_reg_log:
             return latent, reg_log
         if return_unre:
-            return latent, z
+            return latent, z, end_out
 
     def decode(self, z: torch.Tensor, **decoder_kwargs) -> torch.Tensor:
         if self.max_batch_size is None:

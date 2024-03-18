@@ -10,10 +10,10 @@ model:
   # You can set learning rate in the following configuration file.
   config: /hy-tmp/lamavae/configs/models/lamaVAE.yaml
   # Path to the checkpoints or weights you want to resume.
-  resume: 
+  resume: /hy-tmp/lamavae/checkpoints/steps=0.ckpt
 
 lightning:
-  seed: 777
+  seed: 666
   
   trainer:
     accelerator: gpu
@@ -25,9 +25,9 @@ lightning:
     #gpus: 1
     log_every_n_steps: 10
     # Max number of training steps (batches).
-    max_steps: 3000000
+    max_steps: 2000000
     # Validation frequency in terms of training steps.
-    val_check_interval: 500
+    val_check_interval: 250
     # Accumulate gradients from multiple batches so as to increase batch size.
     accumulate_grad_batches: 1
 
@@ -35,7 +35,7 @@ lightning:
     - target: model.callbacks.ModelCheckpoint
       params:
         # Frequency of saving checkpoints.
-        every_n_train_steps: 10000
+        every_n_train_steps: 2000
         save_weights_only: true
         save_top_k: -1
         filename: "{step}"

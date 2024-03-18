@@ -3,5 +3,5 @@ params:
   lama_ckpt_path: "/hy-tmp/MODEL/big-lama.pt"
   sd_ckpt_path: "/hy-tmp/MODEL/sd_xl_base_1.0.safetensors"
   lama: True
-  lr: 1e-4
+  lr: 5e-5
   weight_decay: 1e-6

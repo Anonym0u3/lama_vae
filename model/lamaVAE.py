@@ -1,15 +1,11 @@
 import torch
-from torch import Tensor, optim
+import logging
+from torch import Tensor, optim, nn
 import pytorch_lightning as pl
-import torch.nn.functional as F
 from model.modules import FFCResNetGenerator_lama,LaMa
-from model.help_function import to_torch, resize_square, undo_resize_square, vae_load_checkpoint, disabled_train, freeze_model, freeze_module
-from tqdm import trange
-from PIL import Image
+from model.help_function import to_torch, resize_square, undo_resize_square, vae_load_checkpoint, default, freeze_model, freeze_module, instantiate_from_config
 import numpy as np  
-from typing import Any, Dict, Set
-from pytorch_lightning.utilities.types import STEP_OUTPUT
-
+from typing import Any, Dict, List, Tuple
 
 class DiagonalGaussianDistribution(object):
     def __init__(self, parameters, deterministic=False):
@@ -56,22 +52,46 @@ class DiagonalGaussianDistribution(object):
     def mode(self):
         return self.mean
 
+class DiagonalGaussianRegularizer(nn.Module):
+    def __init__(self, sample: bool = True):
+        super().__init__()
+        self.sample = sample
+
+    def get_trainable_parameters(self) -> Any:
+        yield from ()
+
+    def forward(self, z: torch.Tensor) -> Tuple[torch.Tensor, dict]:
+        log = dict()
+        posterior = DiagonalGaussianDistribution(z)
+        if self.sample:
+            z = posterior.sample()
+        else:
+            z = posterior.mode()
+        kl_loss = posterior.kl()
+        kl_loss = torch.sum(kl_loss) / kl_loss.shape[0]
+        log["kl_loss"] = kl_loss
+        return z, log
+
 class lamaVAE(pl.LightningModule):
     def __init__(self, 
                  lama_ckpt_path,
+                 loss_config,
                  sd_ckpt_path=None,
                  input_nc=4,
                  z_channels=4,
                  lama = False,
                  lr = 0.0001,
-                 weight_decay = 1e-6
+                 weight_decay = 1e-6,
+                 disc_start_iter = 0
                  ):
         super().__init__()
         self.lr = lr
         self.weight_decay = weight_decay
         self.model = FFCResNetGenerator_lama(input_nc,z_channels)
+        self.loss: torch.nn.Module = instantiate_from_config(loss_config)
         self.sd_lama = torch.jit.load(lama_ckpt_path, map_location="cpu").state_dict()
         self.init_from_ckpt(self.sd_lama)
+        self.disc_start_iter = disc_start_iter
         if lama:
             self.lama = LaMa(self.sd_lama)
             freeze_module(self.lama)
@@ -143,69 +163,172 @@ class lamaVAE(pl.LightningModule):
         #img.save('/home/user01/lama_VAE/debug.png')
         #print("done!")
         return result
-
-    def encode(self, image):
+    
+    def get_discriminator_params(self) -> list:
+        if hasattr(self.loss, "get_trainable_parameters"):
+            params = list(self.loss.get_trainable_parameters())  # e.g., discriminator
+        else:
+            params = []
+        return params
+    
+    def get_last_layer(self):
+        return self.vae.first_stage_model.decoder.get_last_layer()
+    
+    def encode_vae(self, image):
         with torch.no_grad():
-            latent, z , end_out = self.vae.encode(image)
-        return latent, z , end_out
+            latent, z = self.vae.encode(image)
+        return latent, z
+    
+    def encode(self, image, mask, return_reg_log=False,unregularized=False):
+        z = self.model(image, mask)
+        if unregularized:
+            return z, dict()
+        z, reg_log = DiagonalGaussianRegularizer(z)
+        if return_reg_log:
+            return z, reg_log
+        return z
     
     def decode(self, z):
-        with torch.no_grad():
-            img = self.vae.decode(z)
+        img = self.vae.decode(z)
         return img
     
     def forward(self, image, mask):
-        
-        return self.model(image, mask)
+        z, reg_log = self.encode(image, mask, return_reg_log=True)
+        decode_img = self.decode(z)
+        return z , decode_img, reg_log
 
-    def get_loss(self, pred_z, gt_z, latent, pred_end_out, gt_end_out):
-        pred_posterior = DiagonalGaussianDistribution(pred_z)
-        gt_posterior = DiagonalGaussianDistribution(gt_z)
-        pred_latent = pred_posterior.sample()
-        mse_loss = F.mse_loss(pred_latent, latent, reduction='mean')
-        end_mse_loss = F.mse_loss(pred_end_out, gt_end_out, reduction='mean')
-        #kl_loss = pred_posterior.kl_loss(gt_posterior)
-        #kl_loss = torch.sum(kl_loss) / kl_loss.shape[0]
-        #kl_loss = torch.clamp(kl_loss, 0, 1)
-        #kl_loss = torch.log(kl_loss)
-        loss = mse_loss  + end_mse_loss
-        return {'mse_loss': mse_loss,'end_loss': end_mse_loss,'loss': loss}
-    
-    def _common_step(self, batch, batch_idx):
+    def inner_training_step(
+        self, batch: dict, batch_idx: int, optimizer_idx: int = 0
+    ) -> torch.Tensor:
         img = batch['image']
         mask = batch['mask']
-        pred_end_out, pred_z = self.model(img, mask)
-        mid = self.forward_lama(img, mask)
-        latent, gt_z, gt_end_out = self.encode(mid)
-        loss = self.get_loss(pred_z, gt_z, latent, pred_end_out, gt_end_out)
-        return loss, img, mask, pred_z, latent, gt_z
 
-    def training_step(self, batch: Dict[str, torch.Tensor], batch_idx: int) -> STEP_OUTPUT:
-        loss, _, _, _, _, _ = self._common_step(batch, batch_idx)
-        self.log("mse_loss", loss['mse_loss'])
-        self.log("end_loss", loss['end_loss'])
-        self.log("train_loss", loss['loss'])
-        return loss['loss']
+        z, xrec, regularization_log = self(img, mask)
+        gt_lama = self.forward_lama(img, mask)
+
+        if hasattr(self.loss, "forward_keys"):
+            extra_info = {
+                "z": z,
+                "optimizer_idx": optimizer_idx,
+                "global_step": self.global_step,
+                "last_layer": self.get_last_layer(),
+                "split": "train",
+                "regularization_log": regularization_log,
+                "autoencoder": self,
+            }
+            extra_info = {k: extra_info[k] for k in self.loss.forward_keys}
+        else:
+            extra_info = dict()
+
+        if optimizer_idx == 0:
+            # autoencode
+            out_loss = self.loss(gt_lama, xrec, **extra_info)
+
+            if isinstance(out_loss, tuple):
+                aeloss, log_dict_ae = out_loss
+            else:
+                # simple loss function
+                aeloss = out_loss
+                log_dict_ae = {"train/loss/rec": aeloss.detach()}
+
+            self.log_dict(
+                log_dict_ae,
+                prog_bar=False,
+                logger=True,
+                on_step=True,
+                on_epoch=True,
+                sync_dist=False,
+            )
+            self.log(
+                "loss",
+                aeloss.mean().detach(),
+                prog_bar=True,
+                logger=False,
+                on_epoch=False,
+                on_step=True,
+            )
+            return aeloss
+        elif optimizer_idx == 1:
+            # discriminator
+            discloss, log_dict_disc = self.loss(gt_lama, xrec, **extra_info)
+            # -> discriminator always needs to return a tuple
+            self.log_dict(
+                log_dict_disc, prog_bar=False, logger=True, on_step=True, on_epoch=True
+            )
+            return discloss
+        else:
+            raise NotImplementedError(f"Unknown optimizer {optimizer_idx}")
     
-    def validation_step(self, batch: Dict[str, torch.Tensor], batch_idx: int) -> None:
-        loss, img, mask, pred_z, latent, gt_z = self._common_step(batch, batch_idx)
-        gt_decode_img = self.decode(latent)
-        pred_posterior = DiagonalGaussianDistribution(pred_z)
-        pred_latent = pred_posterior.sample()
-        pred_decode_img = self.decode(pred_latent)
-        self.log("val_loss", loss['loss'])
-        return gt_decode_img, pred_decode_img
+    def training_step(self, batch: dict, batch_idx: int):
+        opts = self.optimizers()
+        if not isinstance(opts, list):
+            # Non-adversarial case
+            opts = [opts]
+        optimizer_idx = batch_idx % len(opts)
+        if self.global_step < self.disc_start_iter:
+            optimizer_idx = 0
+        opt = opts[optimizer_idx]
+        opt.zero_grad()
+        with opt.toggle_model():
+            loss = self.inner_training_step(
+                batch, batch_idx, optimizer_idx=optimizer_idx
+            )
+            self.manual_backward(loss)
+        opt.step()        
 
+    def validation_step(self, batch: dict, batch_idx: int, postfix: str = "") -> Dict:
+        img = batch['image']
+        mask = batch['mask']
 
-    def configure_optimizers(self) -> optim.AdamW:
-        """
-        Configure optimizer for this model.
-        
-        Returns:
-            optimizer (optim.AdamW): The optimizer for this model.
-        """
-        optimizer = optim.AdamW(
-            [p for p in self.model.parameters() if p.requires_grad], lr=self.lr, weight_decay= self.weight_decay #筛选出所有需要梯度的参数
+        z, xrec, regularization_log = self(img, mask)
+        gt_lama = self.forward_lama(img, mask)
+        if hasattr(self.loss, "forward_keys"):
+            extra_info = {
+                "z": z,
+                "optimizer_idx": 0,
+                "global_step": self.global_step,
+                "last_layer": self.get_last_layer(),
+                "split": "val" + postfix,
+                "regularization_log": regularization_log,
+                "autoencoder": self,
+            }
+            extra_info = {k: extra_info[k] for k in self.loss.forward_keys}
+        else:
+            extra_info = dict()
+        out_loss = self.loss(gt_lama, xrec, **extra_info)
+        if isinstance(out_loss, tuple):
+            aeloss, log_dict_ae = out_loss
+        else:
+            # simple loss function
+            aeloss = out_loss
+            log_dict_ae = {f"val{postfix}/loss/rec": aeloss.detach()}
+        full_log_dict = log_dict_ae
+
+        if "optimizer_idx" in extra_info:
+            extra_info["optimizer_idx"] = 1
+            discloss, log_dict_disc = self.loss(gt_lama, xrec, **extra_info)
+            full_log_dict.update(log_dict_disc)
+        self.log(
+            f"val{postfix}/loss/rec",
+            log_dict_ae[f"val{postfix}/loss/rec"],
+            sync_dist=True,
         )
-        return optimizer
+        self.log_dict(full_log_dict, sync_dist=True)
+        return gt_lama, xrec
     
+    def configure_optimizers(self) -> List[torch.optim.Optimizer]:
+        ae_params = [p for p in self.model.parameters() if p.requires_grad]
+
+        disc_params = self.get_discriminator_params()
+        opt_ae = optim.AdamW(
+            ae_params, lr=default(self.lr_g_factor, 1.0) * self.lr, weight_decay= self.weight_decay #筛选出所有需要梯度的参数
+        )
+
+        opts = [opt_ae]
+        if len(disc_params) > 0:
+            opt_disc = optim.AdamW(
+            disc_params, lr=self.lr, weight_decay= self.weight_decay #筛选出所有需要梯度的参数
+        )
+            opts.append(opt_disc)
+
+        return opts

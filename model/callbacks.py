@@ -5,6 +5,7 @@ import pytorch_lightning as pl
 from pytorch_lightning.loggers import WandbLogger
 from pytorch_lightning.callbacks import Callback
 from pytorch_lightning.callbacks import ModelCheckpoint
+from pytorch_lightning.utilities import rank_zero_only
 # or
 # from wandb.integration.lightning.fabric import WandbLogger
 
@@ -20,7 +21,7 @@ class LogPredictionSamplesCallback(Callback):
         img = Image.fromarray(np.clip(i, 0, 255).astype(np.uint8))
         return img
 
-    @torch.no_grad()
+    @rank_zero_only
     def on_validation_batch_end(
         self, trainer, pl_module, outputs, batch, batch_idx
     ):

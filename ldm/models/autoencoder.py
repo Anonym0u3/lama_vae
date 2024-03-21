@@ -197,7 +197,7 @@ class AutoencodingEngineLegacy(AutoencodingEngine):
         if return_reg_log:
             return latent, reg_log
         if return_unre:
-            return latent, z, end_out
+            return latent, z
 
     def decode(self, z: torch.Tensor, **decoder_kwargs) -> torch.Tensor:
         if self.max_batch_size is None:

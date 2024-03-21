@@ -613,7 +613,10 @@ class Decoder(nn.Module):
                                         kernel_size=3,
                                         stride=1,
                                         padding=1)
-
+        
+    def get_last_layer(self, **kwargs):
+        return self.conv_out.weight
+    
     def forward(self, z, **kwargs):
         #assert z.shape[1:] == self.z_shape[1:]
         self.last_z_shape = z.shape

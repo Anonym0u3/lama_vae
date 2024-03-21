@@ -1,6 +1,8 @@
 from argparse import ArgumentParser
+import os
 from re import L
-
+import datetime
+import sys
 import pytorch_lightning as pl
 from omegaconf import OmegaConf
 import torch
@@ -35,12 +37,13 @@ def main() -> None:
     #parser.add_argument("--config", type=str, required=True)
     #args = parser.parse_args()
     #config = OmegaConf.load(args.config)
-    wandb.finish()
-    wandb_logger = WandbLogger(project="lamaVAE", name="train_vae")
-
+    
+    now = datetime.datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
+    sys.path.append(os.getcwd())
     config = OmegaConf.load("/hy-tmp/lamavae/configs/train_lamavae.yaml") # 加载配置文件，并将其转换为一个DictConfig或ListConfig对象
     pl.seed_everything(config.lightning.seed, workers=True)
-
+    nowname = now + "_train_vae"
+    wandb_logger = WandbLogger(project="lamaVAE", name=nowname, offline=True)
     data_module = instantiate_from_config(config.data)
     model = instantiate_from_config(OmegaConf.load(config.model.config))
     # TODO: resume states saved in checkpoint.
@@ -53,6 +56,7 @@ def main() -> None:
 
     trainer = pl.Trainer(callbacks=callbacks,**config.lightning.trainer,logger=wandb_logger)
     trainer.fit(model, datamodule=data_module)
+    wandb.finish()
 if __name__ == "__main__":
     main()
 

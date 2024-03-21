@@ -10,7 +10,7 @@ model:
   # You can set learning rate in the following configuration file.
   config: /hy-tmp/lamavae/configs/models/lamaVAE.yaml
   # Path to the checkpoints or weights you want to resume.
-  resume: /hy-tmp/lamavae/checkpoints/steps=0.ckpt
+  resume: 
 
 lightning:
   seed: 666

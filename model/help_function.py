@@ -1,13 +1,18 @@
+import os
 import torch
 import torch.nn.functional as F
 from PIL import Image, ImageOps, ImageSequence
-import numpy as np 
+import numpy as np
+import wandb 
 import comfy.utils
 from comfy import model_detection
 from model.modules import VAE
 from typing import Mapping, Any
 import importlib
 from torch import nn
+from pytorch_lightning.utilities import rank_zero_only
+import logging
+from inspect import isfunction
 
 def to_torch(image, mask):
     if len(image.shape) == 3:
@@ -169,3 +174,18 @@ def load_state_dict(model: nn.Module, state_dict: Mapping[str, Any], strict: boo
         state_dict = {key[len("module."):]: value for key, value in state_dict.items()}
     
     model.load_state_dict(state_dict, strict=strict)
+
+logpy = logging.getLogger(__name__)
+def instantiate_optimizer_from_config(params, lr, cfg):
+    logpy.info(f"loading >>> {cfg['target']} <<< optimizer from config")
+    return get_obj_from_str(cfg["target"])(
+        params, lr=lr, **cfg.get("params", dict())
+    )
+
+def exists(x):
+    return x is not None
+
+def default(val, d):
+    if exists(val):
+        return val
+    return d() if isfunction(d) else d

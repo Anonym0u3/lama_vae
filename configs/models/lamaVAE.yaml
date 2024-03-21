@@ -2,6 +2,17 @@ target: model.lamaVAE.lamaVAE
 params:
   lama_ckpt_path: "/hy-tmp/MODEL/big-lama.pt"
   sd_ckpt_path: "/hy-tmp/MODEL/sd_xl_base_1.0.safetensors"
+  loss_config:
+    target: sgm.modules.autoencoding.losses.GeneralLPIPSWithDiscriminator
+    params:
+      perceptual_weight: 0.25
+      disc_start: 20001
+      disc_weight: 0.5
+      learn_logvar: True
+
+      regularization_weights:
+        kl_loss: 1.0
   lama: True
-  lr: 5e-5
+  lr: 1e-5
   weight_decay: 1e-6
+  disc_start_iter: 20001

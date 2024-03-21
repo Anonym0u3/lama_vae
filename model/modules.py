@@ -947,10 +947,9 @@ class FFCResNetGenerator_lama(nn.Module):
         h = self.norm_out(h)
         h = nonlinearity(h)
         h = self.conv_out(h)
-        end_out = h
         h = self.quant_conv(h)
         
-        return end_out, h
+        return h
 
 class LaMa(nn.Module):
     def __init__(self, state_dict) -> None:
@@ -1137,10 +1136,10 @@ class VAE:
         pixel_samples = pixel_samples.movedim(-1,1)
         pixels_in = self.process_input(pixel_samples).to(self.vae_dtype)
         self.first_stage_model = self.first_stage_model.to(pixels_in.device)
-        samples, z , end_out = self.first_stage_model.encode(pixels_in, return_unre=True)
+        samples, z = self.first_stage_model.encode(pixels_in, return_unre=True)
         samples = samples.float()
         z = z.float()
-        return samples, z , end_out
+        return samples, z
 
     """     
     def encode(self, pixel_samples):
